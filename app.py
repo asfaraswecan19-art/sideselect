@@ -16,6 +16,7 @@ import sqlite3
 from datetime import datetime, date, time as dtime
 
 import pandas as pd
+import altair as alt
 import streamlit as st
 
 # ---------------------------------------------------------------------------
@@ -420,52 +421,108 @@ with tab_history:
             settled_hist["net"] = settled_hist.apply(_net_units, axis=1)
             settled_hist["settled_at"] = pd.to_datetime(settled_hist["settled_at"])
             settled_hist["sort_key"] = settled_hist["settled_at"].fillna(settled_hist["posted_at"])
-            settled_hist = settled_hist.sort_values("sort_key")
-            settled_hist["cumulative"] = settled_hist["net"].cumsum()
 
-            total_units = settled_hist["net"].sum()
-            sign = "+" if total_units >= 0 else ""
-            st.markdown(
-                f'<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px;">'
-                f'<span class="ss-brand" style="font-size:20px;">Net units</span>'
-                f'<span class="ss-stat-label {"win" if total_units >= 0 else "loss"}" style="font-size:20px;">{sign}{total_units:.2f}u</span>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-            chart_data = settled_hist.set_index("sort_key")["cumulative"].rename("Net units")
-            st.line_chart(chart_data, width="stretch")
+            if "units_graph_view" not in st.session_state:
+                st.session_state.units_graph_view = "Total"
+
+            gcol1, gcol2, gcol3 = st.columns(3)
+            views = [("Total", None), ("Win model", "Win"), ("FT5 signal", "FT5")]
+            for gcol, (label, market_filter_val) in zip([gcol1, gcol2, gcol3], views):
+                is_active = st.session_state.units_graph_view == label
+                if gcol.button(label, key=f"view_{label}", type="primary" if is_active else "secondary", width="stretch"):
+                    st.session_state.units_graph_view = label
+                    st.rerun()
+
+            active_label, active_market = next(v for v in views if v[0] == st.session_state.units_graph_view)
+            view_hist = settled_hist if active_market is None else settled_hist[settled_hist["market"] == active_market]
+
+            if view_hist.empty:
+                st.caption(f"No settled {active_label.lower()} picks yet.")
+            else:
+                view_hist = view_hist.sort_values("sort_key").copy()
+                view_hist["cumulative"] = view_hist["net"].cumsum()
+                total_units = view_hist["net"].sum()
+                sign = "+" if total_units >= 0 else ""
+                st.markdown(
+                    f'<div style="display:flex;align-items:baseline;gap:10px;margin:14px 0 6px;">'
+                    f'<span class="ss-brand" style="font-size:20px;">Net units — {active_label}</span>'
+                    f'<span class="ss-stat-label {"win" if total_units >= 0 else "loss"}" style="font-size:20px;">{sign}{total_units:.2f}u</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                # Key includes a fingerprint of every settled pick's mutable fields
+                # (status, settled_at, odds, units) so opening/closing/reopening/
+                # editing any pick forces the chart to fully rebuild instead of
+                # risking a stale redraw while this tab isn't the active one.
+                # (st.line_chart has no `key` param, so this uses an explicit
+                # Altair chart instead, which does.)
+                fingerprint = hash(tuple(
+                    hist_df[["id", "status", "settled_at", "odds", "units", "market"]]
+                    .fillna("").astype(str).apply(tuple, axis=1)
+                ))
+                chart_df = view_hist[["sort_key", "cumulative"]].rename(
+                    columns={"sort_key": "Date", "cumulative": "Net units"}
+                )
+                line_color = "#4FD1AE" if total_units >= 0 else "#E2694B"
+                spec = (
+                    alt.Chart(chart_df)
+                    .mark_line(color=line_color, point=True)
+                    .encode(
+                        x=alt.X("Date:T", title=None),
+                        y=alt.Y("Net units:Q", title="Net units"),
+                        tooltip=["Date:T", "Net units:Q"],
+                    )
+                )
+                st.altair_chart(spec, width="stretch", key=f"units_chart_{active_label}_{fingerprint}")
 
         st.divider()
 
         # ── full spreadsheet-style history, color-coded by result ──
         st.markdown('<div class="ss-brand" style="font-size:20px;">All picks</div>', unsafe_allow_html=True)
 
-        table_df = hist_df.sort_values("posted_at", ascending=False).copy()
-        table_df["Posted"] = table_df["posted_at"].dt.strftime("%Y-%m-%d %H:%M")
-        table_df["Odds"] = table_df["odds"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "—")
-        table_df["Units"] = table_df["units"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "—")
-        table_df["Confidence"] = table_df["confidence"].apply(lambda x: f"{x:.0f}%" if pd.notna(x) else "—")
-        table_df["Status"] = table_df["status"].str.capitalize()
-        table_df = table_df.rename(columns={
-            "league": "League", "market": "Market", "match": "Match", "pick": "Pick", "note": "Note",
-        })
-        table_df = table_df[["Posted", "League", "Market", "Match", "Pick", "Odds", "Units", "Confidence", "Status", "Note"]]
+        if "history_table_view" not in st.session_state:
+            st.session_state.history_table_view = "Total"
 
-        def _row_color(row):
-            s = str(row["Status"]).lower()
-            if s == "win":
-                return ["background-color: rgba(79, 209, 174, 0.16)"] * len(row)
-            if s == "loss":
-                return ["background-color: rgba(226, 105, 75, 0.16)"] * len(row)
-            if s == "void":
-                return ["background-color: rgba(139, 147, 167, 0.10)"] * len(row)
-            return [""] * len(row)
+        tcol1, tcol2, tcol3 = st.columns(3)
+        table_views = [("Total", None), ("Win model", "Win"), ("FT5 signal", "FT5")]
+        for tcol, (label, market_filter_val) in zip([tcol1, tcol2, tcol3], table_views):
+            is_active = st.session_state.history_table_view == label
+            if tcol.button(label, key=f"table_view_{label}", type="primary" if is_active else "secondary", width="stretch"):
+                st.session_state.history_table_view = label
+                st.rerun()
 
-        styled = table_df.style.apply(_row_color, axis=1)
-        st.dataframe(styled, width="stretch", hide_index=True)
+        active_table_label, active_table_market = next(v for v in table_views if v[0] == st.session_state.history_table_view)
+        table_source = hist_df if active_table_market is None else hist_df[hist_df["market"] == active_table_market]
 
-        csv_bytes = table_df.to_csv(index=False).encode("utf-8")
-        st.download_button("Download as CSV", data=csv_bytes, file_name="sideselect_history.csv", mime="text/csv")
+        if table_source.empty:
+            st.caption(f"No {active_table_label.lower()} picks yet.")
+        else:
+            table_df = table_source.sort_values("posted_at", ascending=False).copy()
+            table_df["Posted"] = table_df["posted_at"].dt.strftime("%Y-%m-%d %H:%M")
+            table_df["Odds"] = table_df["odds"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "—")
+            table_df["Units"] = table_df["units"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "—")
+            table_df["Confidence"] = table_df["confidence"].apply(lambda x: f"{x:.0f}%" if pd.notna(x) else "—")
+            table_df["Status"] = table_df["status"].str.capitalize()
+            table_df = table_df.rename(columns={
+                "league": "League", "market": "Market", "match": "Match", "pick": "Pick", "note": "Note",
+            })
+            table_df = table_df[["Posted", "League", "Market", "Match", "Pick", "Odds", "Units", "Confidence", "Status", "Note"]]
+
+            def _row_color(row):
+                s = str(row["Status"]).lower()
+                if s == "win":
+                    return ["background-color: rgba(79, 209, 174, 0.16)"] * len(row)
+                if s == "loss":
+                    return ["background-color: rgba(226, 105, 75, 0.16)"] * len(row)
+                if s == "void":
+                    return ["background-color: rgba(139, 147, 167, 0.10)"] * len(row)
+                return [""] * len(row)
+
+            styled = table_df.style.apply(_row_color, axis=1)
+            st.dataframe(styled, width="stretch", hide_index=True)
+
+            csv_bytes = table_df.to_csv(index=False).encode("utf-8")
+            st.download_button("Download as CSV", data=csv_bytes, file_name="sideselect_history.csv", mime="text/csv")
 
 # ---------------------------------------------------------------------------
 # ABOUT / WAITLIST TAB
