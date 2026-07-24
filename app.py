@@ -339,38 +339,18 @@ with tab_about:
     )
 
     st.subheader("How this works")
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3 = st.columns(3)
     method_cards = [
         ("01", "Walk-forward only", "Every statistic a pick relies on is built from games that happened before it, never after."),
-        ("02", "Posted pre-game", "Picks go up before the first pick lock. Nothing is logged, edited, or backfilled after the fact."),
-        ("03", "Edge, not certainty", "Every number is a measured edge over baseline — a real advantage, not a guarantee of the next result."),
-        ("04", "Losses stay up", "The ledger keeps every settled pick, wins and losses both, permanently."),
+        ("02", "Edge, not certainty", "Every number is a measured edge over baseline — a real advantage, not a guarantee of the next result."),
+        ("03", "Losses stay up", "The ledger keeps every settled pick, wins and losses both, permanently."),
     ]
-    for col, (num, title, body) in zip([m1, m2, m3, m4], method_cards):
+    for col, (num, title, body) in zip([m1, m2, m3], method_cards):
         with col:
             with st.container(border=True):
                 st.markdown(f'<span class="ss-num">{num}</span>', unsafe_allow_html=True)
                 st.markdown(f"**{title}**")
                 st.caption(body)
-
-    st.subheader("What didn't make the cut")
-    st.caption("Most of what gets tested doesn't survive contact with an honest backtest — logged here on purpose.")
-    graveyard = [
-        ("First-to-10-kills model", "−1.5% edge"),
-        ("Precise (vs. proxy) FT5 labels", "worse despite being \"more correct\""),
-        ("Lower-tier region inclusion", "coin-flip signal, AUC 0.50"),
-        ("Strength-of-schedule feature", "refuted by its own data"),
-    ]
-    for name, result in graveyard:
-        gc1, gc2 = st.columns([3, 1])
-        gc1.markdown(f'<span class="ss-grave-name">{name}</span>', unsafe_allow_html=True)
-        gc2.markdown(f'<span class="ss-grave-result">{result}</span>', unsafe_allow_html=True)
-
-    st.subheader("Where the edge lives")
-    st.caption("Uneven on purpose — some leagues and markets clear baseline, others don't and are left alone.")
-    st.markdown("- **Top-tier leagues, win market** — strongest, measured edge")
-    st.markdown("- **Low blue-side confidence signal (FT5)** — largest single edge in the system")
-    st.markdown("- **Everything else** — published only where it clears baseline")
 
     st.divider()
     st.subheader("Get picks when they go up")
