@@ -23,7 +23,6 @@ import streamlit as st
 # ---------------------------------------------------------------------------
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sideselect.db")
-MAX_EDGE_SCALE = 20  # % — used only to size the edge bar visually
 KNOWN_LEAGUES = [
     "LCK", "LPL", "LEC", "LCS", "CBLOL", "MSI", "EWC",
     "First Stand", "Worlds", "LCK Challengers", "LFL", "EMEA Masters", "Prime League",
@@ -55,7 +54,9 @@ def init_db():
             market TEXT NOT NULL,
             match TEXT NOT NULL,
             pick TEXT NOT NULL,
-            edge REAL NOT NULL,
+            edge REAL NOT NULL DEFAULT 0,
+            odds REAL,
+            units REAL,
             confidence REAL,
             note TEXT,
             status TEXT NOT NULL DEFAULT 'pending',
@@ -68,6 +69,12 @@ def init_db():
             ts TEXT NOT NULL
         )"""
     )
+    # Migrate any pre-existing picks table that predates the odds/units columns.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(picks)").fetchall()}
+    if "odds" not in cols:
+        conn.execute("ALTER TABLE picks ADD COLUMN odds REAL")
+    if "units" not in cols:
+        conn.execute("ALTER TABLE picks ADD COLUMN units REAL")
     conn.commit()
     conn.close()
 
@@ -82,12 +89,12 @@ def get_picks_df() -> pd.DataFrame:
     return df.sort_values("posted_at", ascending=False).reset_index(drop=True)
 
 
-def add_pick(league, market, match, pick, edge, confidence, note, posted_at):
+def add_pick(league, market, match, pick, odds, units, confidence, note, posted_at):
     conn = get_conn()
     conn.execute(
-        """INSERT INTO picks (id, posted_at, league, market, match, pick, edge, confidence, note, status, settled_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL)""",
-        (str(uuid.uuid4()), posted_at.isoformat(), league, market, match, pick, edge, confidence, note),
+        """INSERT INTO picks (id, posted_at, league, market, match, pick, edge, odds, units, confidence, note, status, settled_at)
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'pending', NULL)""",
+        (str(uuid.uuid4()), posted_at.isoformat(), league, market, match, pick, odds, units, confidence, note),
     )
     conn.commit()
     conn.close()
@@ -151,11 +158,9 @@ st.markdown(
 .ss-badge.loss { color:#E2694B; border-color:#E2694B; }
 .ss-badge.void { color:#8B93A7; text-decoration:line-through; }
 
-.ss-edge-label { font-family:'JetBrains Mono',monospace; font-size:12px; color:#C9A227; }
-.ss-edge-label.win { color:#4FD1AE; } .ss-edge-label.loss { color:#E2694B; }
-.ss-edge-track { height:5px; border-radius:3px; background:#2A3448; overflow:hidden; margin-top:3px; }
-.ss-edge-fill { height:100%; background:#C9A227; }
-.ss-edge-fill.win { background:#4FD1AE; } .ss-edge-fill.loss { background:#E2694B; }
+.ss-stat-label { font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:600; color:#C9A227; }
+.ss-stat-label.win { color:#4FD1AE; } .ss-stat-label.loss { color:#E2694B; }
+.ss-stat-sub { font-family:'JetBrains Mono',monospace; font-size:11px; color:#8B93A7; margin-top:1px; }
 
 .ss-grave-name { font-family:'Space Grotesk',sans-serif; text-decoration:line-through;
     text-decoration-color:#E2694B; text-decoration-thickness:1.5px; }
@@ -214,15 +219,17 @@ with tab_ledger:
     losses = int((settled["status"] == "loss").sum()) if not settled.empty else 0
     pending = int((df["status"] == "pending").sum()) if not df.empty else 0
     accuracy = f"{wins / (wins + losses) * 100:.1f}%" if (wins + losses) > 0 else "—"
-    avg_edge = f"{df['edge'].mean():+.1f}%" if not df.empty else "—"
+    avg_odds = f"{df['odds'].mean():.2f}" if not df.empty and df["odds"].notna().any() else "—"
+    avg_units = f"{df['units'].mean():.1f}u" if not df.empty and df["units"].notna().any() else "—"
     since = df["posted_at"].min().strftime("%b %d, %Y") if not df.empty else "—"
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("Record", f"{wins}–{losses}")
     c2.metric("Accuracy", accuracy)
-    c3.metric("Avg. edge", avg_edge)
-    c4.metric("Pending", pending)
-    c5.metric("Since", since)
+    c3.metric("Avg. odds", avg_odds)
+    c4.metric("Avg. units", avg_units)
+    c5.metric("Pending", pending)
+    c6.metric("Since", since)
 
     st.divider()
 
@@ -233,14 +240,14 @@ with tab_ledger:
                 league = fc1.selectbox("League", KNOWN_LEAGUES)
                 market = fc2.selectbox("Market", ["Win", "FT5"])
                 match = st.text_input("Match", placeholder="e.g. T1 vs Gen.G")
-                pc1, pc2 = st.columns(2)
+                pc1, pc2, pc3 = st.columns(3)
                 pick = pc1.text_input("Pick", placeholder="e.g. T1 — or Red side")
-                edge = pc2.number_input("Edge (%)", step=0.1, format="%.1f")
-                cc1, cc2 = st.columns(2)
-                confidence = cc1.number_input("Blue confidence (%, FT5 only)", min_value=0.0, max_value=100.0, step=0.1, value=0.0)
-                dc1, dc2 = cc2.columns(2)
-                pdate = dc1.date_input("Posted date", value=date.today())
-                ptime = dc2.time_input("Posted time", value=datetime.now().time().replace(second=0, microsecond=0))
+                odds = pc2.number_input("Odds", min_value=1.01, step=0.01, format="%.2f", value=1.90)
+                units = pc3.number_input("Units", min_value=0.0, step=0.1, format="%.1f", value=1.0)
+                cc1, cc2, cc3 = st.columns(3)
+                confidence = cc1.number_input("Pick confidence (%, optional)", min_value=0.0, max_value=100.0, step=0.1, value=0.0)
+                pdate = cc2.date_input("Posted date", value=date.today())
+                ptime = cc3.time_input("Posted time", value=datetime.now().time().replace(second=0, microsecond=0))
                 note = st.text_input("Note (optional)")
 
                 if st.form_submit_button("Post pick", type="primary"):
@@ -248,7 +255,7 @@ with tab_ledger:
                         st.error("Match and pick are required.")
                     else:
                         posted_dt = datetime.combine(pdate, ptime)
-                        add_pick(league, market, match, pick, edge, confidence or None, note, posted_dt)
+                        add_pick(league, market, match, pick, odds, units, confidence or None, note, posted_dt)
                         st.success("Pick posted.")
                         st.rerun()
             st.caption("Post before the game's first pick lock — that's what makes the ledger worth anything.")
@@ -276,10 +283,10 @@ with tab_ledger:
 
         for _, row in view.iterrows():
             status = row["status"]
-            edge_val = float(row["edge"])
-            fill_pct = max(4, min(100, abs(edge_val) / MAX_EDGE_SCALE * 100))
             status_class = status if status in ("win", "loss", "void") else ""
             num = str(numbers[row["id"]]).zfill(3)
+            odds_val = row["odds"] if pd.notna(row["odds"]) else None
+            units_val = row["units"] if pd.notna(row["units"]) else None
 
             with st.container(border=True):
                 left, right = st.columns([4, 1])
@@ -292,16 +299,18 @@ with tab_ledger:
                         unsafe_allow_html=True,
                     )
                     st.markdown(f'<div class="ss-match">{row["match"]}</div>', unsafe_allow_html=True)
-                    conf_txt = f' · blue conf {row["confidence"]:.0f}%' if pd.notna(row["confidence"]) and row["confidence"] else ""
+                    conf_txt = f' · confidence {row["confidence"]:.0f}%' if pd.notna(row["confidence"]) and row["confidence"] else ""
                     st.markdown(f'Pick: **{row["pick"]}**{conf_txt}')
                     if row["note"]:
                         st.markdown(f'<div class="ss-note">{row["note"]}</div>', unsafe_allow_html=True)
 
                 with right:
+                    odds_txt = f'@{odds_val:.2f}' if odds_val is not None else '—'
+                    units_txt = f'{units_val:.1f}u' if units_val is not None else '—'
                     st.markdown(
                         f'<div style="text-align:right;">'
-                        f'<span class="ss-edge-label {status_class}">{edge_val:+.1f}%</span>'
-                        f'<div class="ss-edge-track"><div class="ss-edge-fill {status_class}" style="width:{fill_pct}%"></div></div>'
+                        f'<div class="ss-stat-label {status_class}">{odds_txt}</div>'
+                        f'<div class="ss-stat-sub">{units_txt}</div>'
                         f'<div style="margin-top:8px;"><span class="ss-badge {status_class}">{status}</span></div>'
                         f'</div>',
                         unsafe_allow_html=True,
@@ -342,7 +351,7 @@ with tab_about:
     m1, m2, m3 = st.columns(3)
     method_cards = [
         ("01", "Walk-forward only", "Every statistic a pick relies on is built from games that happened before it, never after."),
-        ("02", "Edge, not certainty", "Every number is a measured edge over baseline — a real advantage, not a guarantee of the next result."),
+        ("02", "Real stakes, real prices", "Every pick lists the odds taken and the size staked — the actual terms of the bet, not just a win/loss call."),
         ("03", "Losses stay up", "The ledger keeps every settled pick, wins and losses both, permanently."),
     ]
     for col, (num, title, body) in zip([m1, m2, m3], method_cards):
@@ -371,9 +380,8 @@ with tab_about:
     st.caption(
         "Side Select publishes model-based predictions for informational purposes only. "
         "This is not financial or gambling advice, and no figure shown is a guarantee — "
-        "every edge is historical and measured over baseline, not a promise about the next "
-        "game. Must be of legal betting age in your jurisdiction; gambling is illegal or "
-        "restricted in some regions. If gambling stops being fun, contact the National "
-        "Problem Gambling Helpline: call or text **1-800-MY-RESET** (or 1-800-522-4700), "
-        "or visit ncpgambling.org."
+        "every result here is historical, not a promise about the next game. Must be of "
+        "legal betting age in your jurisdiction; gambling is illegal or restricted in some "
+        "regions. If gambling stops being fun, contact the National Problem Gambling "
+        "Helpline: call or text **1-800-MY-RESET** (or 1-800-522-4700), or visit ncpgambling.org."
     )
