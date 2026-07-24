@@ -218,7 +218,7 @@ with st.sidebar:
 # Tabs
 # ---------------------------------------------------------------------------
 
-tab_ledger, tab_about = st.tabs(["Ledger", "About & Waitlist"])
+tab_ledger, tab_history, tab_about = st.tabs(["Ledger", "History", "About & Waitlist"])
 
 # ---------------------------------------------------------------------------
 # LEDGER TAB
@@ -391,6 +391,79 @@ with tab_ledger:
                         st.rerun()
                     if bcols[5].button("🗑 Delete", key=f"del_{row['id']}"):
                         delete_pick(row["id"]); st.rerun()
+
+# ---------------------------------------------------------------------------
+# HISTORY TAB — units over time + full spreadsheet-style table
+# ---------------------------------------------------------------------------
+
+with tab_history:
+    hist_df = get_picks_df()
+
+    if hist_df.empty:
+        st.info("No picks logged yet — history will show up here once the first one is posted.")
+    else:
+        # ── net units over time (settled picks only) ──
+        settled_hist = hist_df[hist_df["status"].isin(["win", "loss"])].copy()
+
+        if settled_hist.empty:
+            st.caption("No settled picks yet — the units chart fills in as picks get marked win/loss.")
+        else:
+            def _net_units(row):
+                units = row["units"] if pd.notna(row["units"]) else 0.0
+                odds = row["odds"] if pd.notna(row["odds"]) else 0.0
+                if row["status"] == "win":
+                    return units * (odds - 1)
+                return -units
+
+            settled_hist["net"] = settled_hist.apply(_net_units, axis=1)
+            settled_hist["settled_at"] = pd.to_datetime(settled_hist["settled_at"])
+            settled_hist["sort_key"] = settled_hist["settled_at"].fillna(settled_hist["posted_at"])
+            settled_hist = settled_hist.sort_values("sort_key")
+            settled_hist["cumulative"] = settled_hist["net"].cumsum()
+
+            total_units = settled_hist["net"].sum()
+            sign = "+" if total_units >= 0 else ""
+            st.markdown(
+                f'<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px;">'
+                f'<span class="ss-brand" style="font-size:20px;">Net units</span>'
+                f'<span class="ss-stat-label {"win" if total_units >= 0 else "loss"}" style="font-size:20px;">{sign}{total_units:.2f}u</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            chart_data = settled_hist.set_index("sort_key")["cumulative"].rename("Net units")
+            st.line_chart(chart_data, width="stretch")
+
+        st.divider()
+
+        # ── full spreadsheet-style history, color-coded by result ──
+        st.markdown('<div class="ss-brand" style="font-size:20px;">All picks</div>', unsafe_allow_html=True)
+
+        table_df = hist_df.sort_values("posted_at", ascending=False).copy()
+        table_df["Posted"] = table_df["posted_at"].dt.strftime("%Y-%m-%d %H:%M")
+        table_df["Odds"] = table_df["odds"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "—")
+        table_df["Units"] = table_df["units"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "—")
+        table_df["Confidence"] = table_df["confidence"].apply(lambda x: f"{x:.0f}%" if pd.notna(x) else "—")
+        table_df["Status"] = table_df["status"].str.capitalize()
+        table_df = table_df.rename(columns={
+            "league": "League", "market": "Market", "match": "Match", "pick": "Pick", "note": "Note",
+        })
+        table_df = table_df[["Posted", "League", "Market", "Match", "Pick", "Odds", "Units", "Confidence", "Status", "Note"]]
+
+        def _row_color(row):
+            s = str(row["Status"]).lower()
+            if s == "win":
+                return ["background-color: rgba(79, 209, 174, 0.16)"] * len(row)
+            if s == "loss":
+                return ["background-color: rgba(226, 105, 75, 0.16)"] * len(row)
+            if s == "void":
+                return ["background-color: rgba(139, 147, 167, 0.10)"] * len(row)
+            return [""] * len(row)
+
+        styled = table_df.style.apply(_row_color, axis=1)
+        st.dataframe(styled, width="stretch", hide_index=True)
+
+        csv_bytes = table_df.to_csv(index=False).encode("utf-8")
+        st.download_button("Download as CSV", data=csv_bytes, file_name="sideselect_history.csv", mime="text/csv")
 
 # ---------------------------------------------------------------------------
 # ABOUT / WAITLIST TAB
