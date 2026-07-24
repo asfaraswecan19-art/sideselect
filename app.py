@@ -460,17 +460,19 @@ with tab_history:
                     hist_df[["id", "status", "settled_at", "odds", "units", "market"]]
                     .fillna("").astype(str).apply(tuple, axis=1)
                 ))
-                chart_df = view_hist[["sort_key", "cumulative"]].rename(
-                    columns={"sort_key": "Date", "cumulative": "Net units"}
+                view_hist["day"] = view_hist["sort_key"].dt.floor("D")
+                chart_df = (
+                    view_hist.groupby("day", as_index=False)["cumulative"].last()
+                    .rename(columns={"day": "Date", "cumulative": "Net units"})
                 )
                 line_color = "#4FD1AE" if total_units >= 0 else "#E2694B"
                 spec = (
                     alt.Chart(chart_df)
                     .mark_line(color=line_color, point=True)
                     .encode(
-                        x=alt.X("Date:T", title=None),
+                        x=alt.X("Date:T", title=None, timeUnit="yearmonthdate"),
                         y=alt.Y("Net units:Q", title="Net units"),
-                        tooltip=["Date:T", "Net units:Q"],
+                        tooltip=[alt.Tooltip("Date:T", timeUnit="yearmonthdate", title="Day"), "Net units:Q"],
                     )
                 )
                 st.altair_chart(spec, width="stretch", key=f"units_chart_{active_label}_{fingerprint}")
