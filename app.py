@@ -100,6 +100,17 @@ def add_pick(league, market, match, pick, odds, units, confidence, note, posted_
     conn.close()
 
 
+def update_pick(pick_id, league, market, match, pick, odds, units, confidence, note, posted_at):
+    conn = get_conn()
+    conn.execute(
+        """UPDATE picks SET league=?, market=?, match=?, pick=?, odds=?, units=?, confidence=?, note=?, posted_at=?
+           WHERE id=?""",
+        (league, market, match, pick, odds, units, confidence, note, posted_at.isoformat(), pick_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 def set_status(pick_id, status):
     conn = get_conn()
     settled_at = datetime.now().isoformat() if status in ("win", "loss") else None
@@ -176,6 +187,8 @@ st.markdown(
 
 if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
+if "editing_pick_id" not in st.session_state:
+    st.session_state.editing_pick_id = None
 
 with st.sidebar:
     st.markdown('<div class="ss-brand"><span class="accent">Side</span> Select</div>', unsafe_allow_html=True)
@@ -287,8 +300,53 @@ with tab_ledger:
             num = str(numbers[row["id"]]).zfill(3)
             odds_val = row["odds"] if pd.notna(row["odds"]) else None
             units_val = row["units"] if pd.notna(row["units"]) else None
+            is_editing = st.session_state.is_admin and st.session_state.editing_pick_id == row["id"]
 
             with st.container(border=True):
+                if is_editing:
+                    st.markdown(f'<span class="ss-num">№{num}</span> <span class="ss-pill">editing</span>', unsafe_allow_html=True)
+                    with st.form(f"edit_form_{row['id']}"):
+                        efc1, efc2 = st.columns(2)
+                        league_idx = KNOWN_LEAGUES.index(row["league"]) if row["league"] in KNOWN_LEAGUES else 0
+                        e_league = efc1.selectbox("League", KNOWN_LEAGUES, index=league_idx, key=f"e_league_{row['id']}")
+                        market_opts = ["Win", "FT5"]
+                        market_idx = market_opts.index(row["market"]) if row["market"] in market_opts else 0
+                        e_market = efc2.selectbox("Market", market_opts, index=market_idx, key=f"e_market_{row['id']}")
+                        e_match = st.text_input("Match", value=row["match"], key=f"e_match_{row['id']}")
+                        epc1, epc2, epc3 = st.columns(3)
+                        e_pick = epc1.text_input("Pick", value=row["pick"], key=f"e_pick_{row['id']}")
+                        e_odds = epc2.number_input("Odds", min_value=1.01, step=0.01, format="%.2f",
+                                                    value=float(odds_val) if odds_val is not None else 1.90,
+                                                    key=f"e_odds_{row['id']}")
+                        e_units = epc3.number_input("Units", min_value=0.0, step=0.1, format="%.1f",
+                                                     value=float(units_val) if units_val is not None else 1.0,
+                                                     key=f"e_units_{row['id']}")
+                        ecc1, ecc2, ecc3 = st.columns(3)
+                        conf_val = row["confidence"] if pd.notna(row["confidence"]) else 0.0
+                        e_conf = ecc1.number_input("Pick confidence (%, optional)", min_value=0.0, max_value=100.0,
+                                                    step=0.1, value=float(conf_val), key=f"e_conf_{row['id']}")
+                        e_pdate = ecc2.date_input("Posted date", value=row["posted_at"].date(), key=f"e_pdate_{row['id']}")
+                        e_ptime = ecc3.time_input("Posted time", value=row["posted_at"].time().replace(second=0, microsecond=0),
+                                                   key=f"e_ptime_{row['id']}")
+                        e_note = st.text_input("Note (optional)", value=row["note"] or "", key=f"e_note_{row['id']}")
+
+                        save_col, cancel_col = st.columns(2)
+                        saved = save_col.form_submit_button("Save changes", type="primary")
+                        cancelled = cancel_col.form_submit_button("Cancel")
+                        if saved:
+                            if not e_match or not e_pick:
+                                st.error("Match and pick are required.")
+                            else:
+                                posted_dt = datetime.combine(e_pdate, e_ptime)
+                                update_pick(row["id"], e_league, e_market, e_match, e_pick,
+                                            e_odds, e_units, e_conf or None, e_note, posted_dt)
+                                st.session_state.editing_pick_id = None
+                                st.rerun()
+                        if cancelled:
+                            st.session_state.editing_pick_id = None
+                            st.rerun()
+                    continue
+
                 left, right = st.columns([4, 1])
                 with left:
                     st.markdown(
@@ -317,7 +375,7 @@ with tab_ledger:
                     )
 
                 if st.session_state.is_admin:
-                    bcols = st.columns(5)
+                    bcols = st.columns(6)
                     if status == "pending":
                         if bcols[0].button("Mark win", key=f"win_{row['id']}"):
                             set_status(row["id"], "win"); st.rerun()
@@ -328,7 +386,10 @@ with tab_ledger:
                     else:
                         if bcols[0].button("Reopen", key=f"reopen_{row['id']}"):
                             set_status(row["id"], "pending"); st.rerun()
-                    if bcols[4].button("🗑 Delete", key=f"del_{row['id']}"):
+                    if bcols[4].button("✏️ Edit", key=f"edit_{row['id']}"):
+                        st.session_state.editing_pick_id = row["id"]
+                        st.rerun()
+                    if bcols[5].button("🗑 Delete", key=f"del_{row['id']}"):
                         delete_pick(row["id"]); st.rerun()
 
 # ---------------------------------------------------------------------------
