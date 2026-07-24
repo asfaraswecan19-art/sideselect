@@ -225,28 +225,11 @@ tab_ledger, tab_history, tab_about = st.tabs(["Ledger", "History", "About & Wait
 # ---------------------------------------------------------------------------
 
 with tab_ledger:
-    df = get_picks_df()
+    if not st.session_state.is_admin:
+        st.info("🔒 This section is for managing picks. Log in as admin from the sidebar to view it.")
+    else:
+        df = get_picks_df()
 
-    settled = df[df["status"].isin(["win", "loss"])] if not df.empty else df
-    wins = int((settled["status"] == "win").sum()) if not settled.empty else 0
-    losses = int((settled["status"] == "loss").sum()) if not settled.empty else 0
-    pending = int((df["status"] == "pending").sum()) if not df.empty else 0
-    accuracy = f"{wins / (wins + losses) * 100:.1f}%" if (wins + losses) > 0 else "—"
-    avg_odds = f"{df['odds'].mean():.2f}" if not df.empty and df["odds"].notna().any() else "—"
-    avg_units = f"{df['units'].mean():.1f}u" if not df.empty and df["units"].notna().any() else "—"
-    since = df["posted_at"].min().strftime("%b %d, %Y") if not df.empty else "—"
-
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("Record", f"{wins}–{losses}")
-    c2.metric("Accuracy", accuracy)
-    c3.metric("Avg. odds", avg_odds)
-    c4.metric("Avg. units", avg_units)
-    c5.metric("Pending", pending)
-    c6.metric("Since", since)
-
-    st.divider()
-
-    if st.session_state.is_admin:
         with st.expander("➕ Log a new pick", expanded=df.empty):
             with st.form("add_pick_form", clear_on_submit=True):
                 fc1, fc2 = st.columns(2)
@@ -273,124 +256,124 @@ with tab_ledger:
                         st.rerun()
             st.caption("Post before the game's first pick lock — that's what makes the ledger worth anything.")
 
-    fcol1, fcol2 = st.columns([3, 2])
-    market_filter = fcol1.radio("Market", ["All", "Win", "FT5"], horizontal=True, label_visibility="collapsed")
-    league_options = ["All leagues"] + sorted(set(KNOWN_LEAGUES) | (set(df["league"]) if not df.empty else set()))
-    league_filter = fcol2.selectbox("League", league_options, label_visibility="collapsed")
+        fcol1, fcol2 = st.columns([3, 2])
+        market_filter = fcol1.radio("Market", ["All", "Win", "FT5"], horizontal=True, label_visibility="collapsed")
+        league_options = ["All leagues"] + sorted(set(KNOWN_LEAGUES) | (set(df["league"]) if not df.empty else set()))
+        league_filter = fcol2.selectbox("League", league_options, label_visibility="collapsed")
 
-    if df.empty:
-        st.info("No picks logged yet." + (" Use the form above to post the first one." if st.session_state.is_admin else " Check back once the first pick goes up — every one is posted before the game starts."))
-    else:
-        # chronological numbering (oldest = 1), independent of filters/sort
-        chrono = df.sort_values("posted_at")
-        numbers = {pid: i + 1 for i, pid in enumerate(chrono["id"])}
+        if df.empty:
+            st.info("No picks logged yet. Use the form above to post the first one.")
+        else:
+            # chronological numbering (oldest = 1), independent of filters/sort
+            chrono = df.sort_values("posted_at")
+            numbers = {pid: i + 1 for i, pid in enumerate(chrono["id"])}
 
-        view = df.copy()
-        if market_filter != "All":
-            view = view[view["market"] == market_filter]
-        if league_filter != "All leagues":
-            view = view[view["league"] == league_filter]
+            view = df.copy()
+            if market_filter != "All":
+                view = view[view["market"] == market_filter]
+            if league_filter != "All leagues":
+                view = view[view["league"] == league_filter]
 
-        if view.empty:
-            st.info("No picks match these filters.")
+            if view.empty:
+                st.info("No picks match these filters.")
 
-        for _, row in view.iterrows():
-            status = row["status"]
-            status_class = status if status in ("win", "loss", "void") else ""
-            num = str(numbers[row["id"]]).zfill(3)
-            odds_val = row["odds"] if pd.notna(row["odds"]) else None
-            units_val = row["units"] if pd.notna(row["units"]) else None
-            is_editing = st.session_state.is_admin and st.session_state.editing_pick_id == row["id"]
+            for _, row in view.iterrows():
+                status = row["status"]
+                status_class = status if status in ("win", "loss", "void") else ""
+                num = str(numbers[row["id"]]).zfill(3)
+                odds_val = row["odds"] if pd.notna(row["odds"]) else None
+                units_val = row["units"] if pd.notna(row["units"]) else None
+                is_editing = st.session_state.is_admin and st.session_state.editing_pick_id == row["id"]
 
-            with st.container(border=True):
-                if is_editing:
-                    st.markdown(f'<span class="ss-num">№{num}</span> <span class="ss-pill">editing</span>', unsafe_allow_html=True)
-                    with st.form(f"edit_form_{row['id']}"):
-                        efc1, efc2 = st.columns(2)
-                        league_idx = KNOWN_LEAGUES.index(row["league"]) if row["league"] in KNOWN_LEAGUES else 0
-                        e_league = efc1.selectbox("League", KNOWN_LEAGUES, index=league_idx, key=f"e_league_{row['id']}")
-                        market_opts = ["Win", "FT5"]
-                        market_idx = market_opts.index(row["market"]) if row["market"] in market_opts else 0
-                        e_market = efc2.selectbox("Market", market_opts, index=market_idx, key=f"e_market_{row['id']}")
-                        e_match = st.text_input("Match", value=row["match"], key=f"e_match_{row['id']}")
-                        epc1, epc2, epc3 = st.columns(3)
-                        e_pick = epc1.text_input("Pick", value=row["pick"], key=f"e_pick_{row['id']}")
-                        e_odds = epc2.number_input("Odds", min_value=1.01, step=0.01, format="%.2f",
-                                                    value=float(odds_val) if odds_val is not None else 1.90,
-                                                    key=f"e_odds_{row['id']}")
-                        e_units = epc3.number_input("Units", min_value=0.0, step=0.1, format="%.1f",
-                                                     value=float(units_val) if units_val is not None else 1.0,
-                                                     key=f"e_units_{row['id']}")
-                        ecc1, ecc2, ecc3 = st.columns(3)
-                        conf_val = row["confidence"] if pd.notna(row["confidence"]) else 0.0
-                        e_conf = ecc1.number_input("Pick confidence (%, optional)", min_value=0.0, max_value=100.0,
-                                                    step=0.1, value=float(conf_val), key=f"e_conf_{row['id']}")
-                        e_pdate = ecc2.date_input("Posted date", value=row["posted_at"].date(), key=f"e_pdate_{row['id']}")
-                        e_ptime = ecc3.time_input("Posted time", value=row["posted_at"].time().replace(second=0, microsecond=0),
-                                                   key=f"e_ptime_{row['id']}")
-                        e_note = st.text_input("Note (optional)", value=row["note"] or "", key=f"e_note_{row['id']}")
+                with st.container(border=True):
+                    if is_editing:
+                        st.markdown(f'<span class="ss-num">№{num}</span> <span class="ss-pill">editing</span>', unsafe_allow_html=True)
+                        with st.form(f"edit_form_{row['id']}"):
+                            efc1, efc2 = st.columns(2)
+                            league_idx = KNOWN_LEAGUES.index(row["league"]) if row["league"] in KNOWN_LEAGUES else 0
+                            e_league = efc1.selectbox("League", KNOWN_LEAGUES, index=league_idx, key=f"e_league_{row['id']}")
+                            market_opts = ["Win", "FT5"]
+                            market_idx = market_opts.index(row["market"]) if row["market"] in market_opts else 0
+                            e_market = efc2.selectbox("Market", market_opts, index=market_idx, key=f"e_market_{row['id']}")
+                            e_match = st.text_input("Match", value=row["match"], key=f"e_match_{row['id']}")
+                            epc1, epc2, epc3 = st.columns(3)
+                            e_pick = epc1.text_input("Pick", value=row["pick"], key=f"e_pick_{row['id']}")
+                            e_odds = epc2.number_input("Odds", min_value=1.01, step=0.01, format="%.2f",
+                                                        value=float(odds_val) if odds_val is not None else 1.90,
+                                                        key=f"e_odds_{row['id']}")
+                            e_units = epc3.number_input("Units", min_value=0.0, step=0.1, format="%.1f",
+                                                         value=float(units_val) if units_val is not None else 1.0,
+                                                         key=f"e_units_{row['id']}")
+                            ecc1, ecc2, ecc3 = st.columns(3)
+                            conf_val = row["confidence"] if pd.notna(row["confidence"]) else 0.0
+                            e_conf = ecc1.number_input("Pick confidence (%, optional)", min_value=0.0, max_value=100.0,
+                                                        step=0.1, value=float(conf_val), key=f"e_conf_{row['id']}")
+                            e_pdate = ecc2.date_input("Posted date", value=row["posted_at"].date(), key=f"e_pdate_{row['id']}")
+                            e_ptime = ecc3.time_input("Posted time", value=row["posted_at"].time().replace(second=0, microsecond=0),
+                                                       key=f"e_ptime_{row['id']}")
+                            e_note = st.text_input("Note (optional)", value=row["note"] or "", key=f"e_note_{row['id']}")
 
-                        save_col, cancel_col = st.columns(2)
-                        saved = save_col.form_submit_button("Save changes", type="primary")
-                        cancelled = cancel_col.form_submit_button("Cancel")
-                        if saved:
-                            if not e_match or not e_pick:
-                                st.error("Match and pick are required.")
-                            else:
-                                posted_dt = datetime.combine(e_pdate, e_ptime)
-                                update_pick(row["id"], e_league, e_market, e_match, e_pick,
-                                            e_odds, e_units, e_conf or None, e_note, posted_dt)
+                            save_col, cancel_col = st.columns(2)
+                            saved = save_col.form_submit_button("Save changes", type="primary")
+                            cancelled = cancel_col.form_submit_button("Cancel")
+                            if saved:
+                                if not e_match or not e_pick:
+                                    st.error("Match and pick are required.")
+                                else:
+                                    posted_dt = datetime.combine(e_pdate, e_ptime)
+                                    update_pick(row["id"], e_league, e_market, e_match, e_pick,
+                                                e_odds, e_units, e_conf or None, e_note, posted_dt)
+                                    st.session_state.editing_pick_id = None
+                                    st.rerun()
+                            if cancelled:
                                 st.session_state.editing_pick_id = None
                                 st.rerun()
-                        if cancelled:
-                            st.session_state.editing_pick_id = None
+                        continue
+
+                    left, right = st.columns([4, 1])
+                    with left:
+                        st.markdown(
+                            f'<span class="ss-num">№{num}</span> '
+                            f'<span class="ss-pill">{row["league"]}</span> '
+                            f'<span class="ss-market">{"FT5 SIGNAL" if row["market"] == "FT5" else "WIN MODEL"}</span> '
+                            f'<span class="ss-posted">posted {row["posted_at"].strftime("%b %d, %Y")}</span>',
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown(f'<div class="ss-match">{row["match"]}</div>', unsafe_allow_html=True)
+                        conf_txt = f' · confidence {row["confidence"]:.0f}%' if pd.notna(row["confidence"]) and row["confidence"] else ""
+                        st.markdown(f'Pick: **{row["pick"]}**{conf_txt}')
+                        if row["note"]:
+                            st.markdown(f'<div class="ss-note">{row["note"]}</div>', unsafe_allow_html=True)
+
+                    with right:
+                        odds_txt = f'@{odds_val:.2f}' if odds_val is not None else '—'
+                        units_txt = f'{units_val:.1f}u' if units_val is not None else '—'
+                        st.markdown(
+                            f'<div style="text-align:right;">'
+                            f'<div class="ss-stat-label {status_class}">{odds_txt}</div>'
+                            f'<div class="ss-stat-sub">{units_txt}</div>'
+                            f'<div style="margin-top:8px;"><span class="ss-badge {status_class}">{status}</span></div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                    if st.session_state.is_admin:
+                        bcols = st.columns(6)
+                        if status == "pending":
+                            if bcols[0].button("Mark win", key=f"win_{row['id']}"):
+                                set_status(row["id"], "win"); st.rerun()
+                            if bcols[1].button("Mark loss", key=f"loss_{row['id']}"):
+                                set_status(row["id"], "loss"); st.rerun()
+                            if bcols[2].button("Void", key=f"void_{row['id']}"):
+                                set_status(row["id"], "void"); st.rerun()
+                        else:
+                            if bcols[0].button("Reopen", key=f"reopen_{row['id']}"):
+                                set_status(row["id"], "pending"); st.rerun()
+                        if bcols[4].button("✏️ Edit", key=f"edit_{row['id']}"):
+                            st.session_state.editing_pick_id = row["id"]
                             st.rerun()
-                    continue
-
-                left, right = st.columns([4, 1])
-                with left:
-                    st.markdown(
-                        f'<span class="ss-num">№{num}</span> '
-                        f'<span class="ss-pill">{row["league"]}</span> '
-                        f'<span class="ss-market">{"FT5 SIGNAL" if row["market"] == "FT5" else "WIN MODEL"}</span> '
-                        f'<span class="ss-posted">posted {row["posted_at"].strftime("%b %d, %Y")}</span>',
-                        unsafe_allow_html=True,
-                    )
-                    st.markdown(f'<div class="ss-match">{row["match"]}</div>', unsafe_allow_html=True)
-                    conf_txt = f' · confidence {row["confidence"]:.0f}%' if pd.notna(row["confidence"]) and row["confidence"] else ""
-                    st.markdown(f'Pick: **{row["pick"]}**{conf_txt}')
-                    if row["note"]:
-                        st.markdown(f'<div class="ss-note">{row["note"]}</div>', unsafe_allow_html=True)
-
-                with right:
-                    odds_txt = f'@{odds_val:.2f}' if odds_val is not None else '—'
-                    units_txt = f'{units_val:.1f}u' if units_val is not None else '—'
-                    st.markdown(
-                        f'<div style="text-align:right;">'
-                        f'<div class="ss-stat-label {status_class}">{odds_txt}</div>'
-                        f'<div class="ss-stat-sub">{units_txt}</div>'
-                        f'<div style="margin-top:8px;"><span class="ss-badge {status_class}">{status}</span></div>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-
-                if st.session_state.is_admin:
-                    bcols = st.columns(6)
-                    if status == "pending":
-                        if bcols[0].button("Mark win", key=f"win_{row['id']}"):
-                            set_status(row["id"], "win"); st.rerun()
-                        if bcols[1].button("Mark loss", key=f"loss_{row['id']}"):
-                            set_status(row["id"], "loss"); st.rerun()
-                        if bcols[2].button("Void", key=f"void_{row['id']}"):
-                            set_status(row["id"], "void"); st.rerun()
-                    else:
-                        if bcols[0].button("Reopen", key=f"reopen_{row['id']}"):
-                            set_status(row["id"], "pending"); st.rerun()
-                    if bcols[4].button("✏️ Edit", key=f"edit_{row['id']}"):
-                        st.session_state.editing_pick_id = row["id"]
-                        st.rerun()
-                    if bcols[5].button("🗑 Delete", key=f"del_{row['id']}"):
-                        delete_pick(row["id"]); st.rerun()
+                        if bcols[5].button("🗑 Delete", key=f"del_{row['id']}"):
+                            delete_pick(row["id"]); st.rerun()
 
 # ---------------------------------------------------------------------------
 # HISTORY TAB — units over time + full spreadsheet-style table
@@ -398,6 +381,25 @@ with tab_ledger:
 
 with tab_history:
     hist_df = get_picks_df()
+
+    settled_all = hist_df[hist_df["status"].isin(["win", "loss"])] if not hist_df.empty else hist_df
+    wins_all = int((settled_all["status"] == "win").sum()) if not settled_all.empty else 0
+    losses_all = int((settled_all["status"] == "loss").sum()) if not settled_all.empty else 0
+    pending_all = int((hist_df["status"] == "pending").sum()) if not hist_df.empty else 0
+    accuracy_all = f"{wins_all / (wins_all + losses_all) * 100:.1f}%" if (wins_all + losses_all) > 0 else "—"
+    avg_odds_all = f"{hist_df['odds'].mean():.2f}" if not hist_df.empty and hist_df["odds"].notna().any() else "—"
+    avg_units_all = f"{hist_df['units'].mean():.1f}u" if not hist_df.empty and hist_df["units"].notna().any() else "—"
+    since_all = hist_df["posted_at"].min().strftime("%b %d, %Y") if not hist_df.empty else "—"
+
+    sc1, sc2, sc3, sc4, sc5, sc6 = st.columns(6)
+    sc1.metric("Record", f"{wins_all}–{losses_all}")
+    sc2.metric("Accuracy", accuracy_all)
+    sc3.metric("Avg. odds", avg_odds_all)
+    sc4.metric("Avg. units", avg_units_all)
+    sc5.metric("Pending", pending_all)
+    sc6.metric("Since", since_all)
+
+    st.divider()
 
     if hist_df.empty:
         st.info("No picks logged yet — history will show up here once the first one is posted.")
